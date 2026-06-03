@@ -7,3 +7,4 @@ numpy==1.26.4
 scikit-learn==1.5.0
 instructor==1.7.2
 openai==1.77.0
+mcp==1.27.1
