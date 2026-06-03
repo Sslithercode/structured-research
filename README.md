@@ -222,6 +222,7 @@ structured-research/
 | `get_research_config` | Returns current min/max queries and pipeline settings — call first |
 | `structured_search` | Run a single search query, returns graph_id + summary |
 | `combine_graphs` | Merge one or more graphs into a unified evidence base |
+|`distill_graphs`|  distills the graph performs remapping and gives more queries
 
 ---
 
