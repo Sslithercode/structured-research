@@ -4,7 +4,7 @@ A research harness that turns questions into reliability-scored claim graphs. In
 
 ## What it does
 
-1. **Searches** the web via Tavily, fetches and chunks full article content
+1. **Searches** the web, fetches and chunks full article content
 2. **Extracts atomic claims** from each chunk — classified as fact, prediction, opinion, or reported speech
 3. **Scores source reliability** — weighted formula across source authority, author credibility, date relevance, and Tavily score
 4. **Merges corroborated claims** — groups claims that assert the same fact across sources into a single canonical claim, preserving original phrasings
@@ -13,7 +13,7 @@ A research harness that turns questions into reliability-scored claim graphs. In
 7. **Combines graphs** — when multiple searches are run, deduplicates sources, remaps claims, and re-merges across the full evidence set
 8. **Scores faithfulness** — verifies extracted claims against the source chunk they came from
 
-The output is a structured `ClaimGraph` — not a summary, not raw text. Claude (or any consumer) gets a graph of what is established, what is contested, and where each fact came from.
+The output is a structured `ClaimGraph` — not a summary, not raw text. Claude (or any consumer) gets a graph of what is established, what is contested, and where each fact came from. there is an optional distillation step that performs advanced remapping.
 
 ---
 
@@ -26,19 +26,19 @@ The output is a structured `ClaimGraph` — not a summary, not raw text. Claude 
 - An [OpenRouter](https://openrouter.ai) API key
 - A [Tavily](https://tavily.com) API key
 
-### 1. Clone and install backend
+### 1. Clone and install backend with uv
 
 ```bash
 git clone https://github.com/yourname/structured-research
 cd structured-research
 
-python -m venv .venv
+uv venv
 # Windows:
 .venv\Scripts\activate
 # Mac/Linux:
 source .venv/bin/activate
 
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 ### 2. Set up environment
@@ -60,7 +60,7 @@ cd ..
 
 ```bash
 # Backend (HTTP + MCP over SSE):
-python -m backend.server
+uv run uvicorn main.py
 
 # Frontend (separate terminal):
 cd frontend
@@ -78,30 +78,15 @@ Frontend: `http://localhost:5173` — Backend: `http://localhost:8000`
 Add to your MCP config:
 
 ```json
-{
-  "mcpServers": {
+"mcpServers": {
     "structured-research": {
-      "command": "python",
-      "args": ["-m", "backend.server"],
-      "cwd": "/path/to/structured-research"
+      "type": "sse",
+      "url": "http://localhost:8000/mcp/sse"
     }
-  }
-}
 ```
 
-Install the skill from `skill/` into your Claude skills directory. Claude will automatically decompose research questions into sub-queries, run structured searches, combine the graphs, and synthesize a cited answer.
+Install the skill from `skill/` into your Claude skills directory. Claude will automatically decompose research questions into sub-queries, run structured searches, combine the graphs, distill and synthesize a cited answer.
 
-### Claude.ai (remote connector)
-
-Run the server somewhere publicly accessible, then go to **Settings → Integrations → Add custom integration** and paste:
-
-```
-https://your-host/mcp/sse
-```
-
-Claude auto-discovers the three MCP tools from there.
-
----
 
 ## Frontend
 
