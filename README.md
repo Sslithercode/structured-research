@@ -242,4 +242,4 @@ structured-research/
 
 ## License
 
-BUSL
+see license file
