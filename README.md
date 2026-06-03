@@ -216,4 +216,4 @@ structured-research/
 
 ## License
 
-MIT
+BUSL
