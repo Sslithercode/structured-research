@@ -1,16 +1,19 @@
 # Structured Research
 
-A research agent harness which turns questions into reliability-scored claim graphs, then synthesizes cited answers. Runs as both a FastAPI HTTP server and an MCP server so it works directly inside Claude Code.
+A research harness that turns questions into reliability-scored claim graphs. Instead of returning raw text from the web, it extracts atomic claims from each source, corroborates them across sources, detects conflicts, and builds a structured evidence graph. Runs as both a FastAPI HTTP server and an MCP server — plug it directly into Claude as a custom connector or use it via the frontend UI.
 
 ## What it does
 
-1. **Searches** the web across multiple angles in parallel
-2. **Extracts claims** from each source, chunks and embeds them
-3. **Merges** corroborated claims across sources, detects conflicts
-4. **Builds a graph** — nodes are claims, edges are `supports / contradicts / qualifies`
-5. **Scores reliability** of each source (tier: high / medium / low)
-6. **Combines** multiple search graphs into a unified evidence base
-7. **Synthesizes** a cited answer through the Claude skill
+1. **Searches** the web via Tavily, fetches and chunks full article content
+2. **Extracts atomic claims** from each chunk — classified as fact, prediction, opinion, or reported speech
+3. **Scores source reliability** — weighted formula across source authority, author credibility, date relevance, and Tavily score
+4. **Merges corroborated claims** — groups claims that assert the same fact across sources into a single canonical claim, preserving original phrasings
+5. **Detects conflicts** — identifies pairs of claims that directly contradict each other
+6. **Builds an edge graph** — `supports / contradicts / qualifies` edges between claims
+7. **Combines graphs** — when multiple searches are run, deduplicates sources, remaps claims, and re-merges across the full evidence set
+8. **Scores faithfulness** — verifies extracted claims against the source chunk they came from
+
+The output is a structured `ClaimGraph` — not a summary, not raw text. Claude (or any consumer) gets a graph of what is established, what is contested, and where each fact came from.
 
 ---
 
@@ -20,8 +23,8 @@ A research agent harness which turns questions into reliability-scored claim gra
 
 - Python 3.11+
 - Node.js 18+
-- An [OpenRouter](https://openrouter.ai) API key (for LLM calls)
-- A [Tavily](https://tavily.com) API key (for web search) other providers coming soon
+- An [OpenRouter](https://openrouter.ai) API key
+- A [Tavily](https://tavily.com) API key
 
 ### 1. Clone and install backend
 
@@ -40,8 +43,6 @@ pip install -r requirements.txt
 
 ### 2. Set up environment
 
-Create a `.env` file in the root:
-
 ```env
 OPENROUTER_API_KEY=sk-or-...
 TAVILY_API_KEY=tvly-...
@@ -57,24 +58,24 @@ cd ..
 
 ### 4. Run
 
-**Backend** (HTTP + MCP over SSE):
 ```bash
+# Backend (HTTP + MCP over SSE):
 python -m backend.server
-```
 
-**Frontend** (in a separate terminal):
-```bash
+# Frontend (separate terminal):
 cd frontend
 npm run dev
 ```
 
-Frontend runs at `http://localhost:5173`, backend at `http://localhost:8000`.
+Frontend: `http://localhost:5173` — Backend: `http://localhost:8000`
 
 ---
 
-## Using with Claude Code (MCP)
+## Using with Claude (MCP)
 
-Add to your Claude Code MCP config:
+### Claude Code
+
+Add to your MCP config:
 
 ```json
 {
@@ -88,7 +89,32 @@ Add to your Claude Code MCP config:
 }
 ```
 
-Then install the skill from the `skill/` folder into your Claude skills directory. Once installed, Claude will automatically use the structured research workflow when you ask research questions.
+Install the skill from `skill/` into your Claude skills directory. Claude will automatically decompose research questions into sub-queries, run structured searches, combine the graphs, and synthesize a cited answer.
+
+### Claude.ai (remote connector)
+
+Run the server somewhere publicly accessible, then go to **Settings → Integrations → Add custom integration** and paste:
+
+```
+https://your-host/mcp/sse
+```
+
+Claude auto-discovers the three MCP tools from there.
+
+---
+
+## Frontend
+
+The frontend is a real-time research workspace:
+
+- **Sessions** — each search is a session; run multiple in parallel
+- **Claim filtering** — filter by claim type, source reliability tier, conflicts, corroboration, or free-text search
+- **Claim editing** — edit, delete, or add claims before combining
+- **Original phrasings** — for corroborated claims, expand to see what each source originally said before the canonical rewrite
+- **Conflict panel** — dedicated view of all contradicting claim pairs with their sources
+- **Combine** — select multiple sessions, combine into a unified graph with cross-search dedup and re-merge
+- **Pipeline log** — live stream of each pipeline stage, with optional pause/approve at each stage
+- **Export / Delete** — export any graph as JSON, delete sessions (also removes from disk)
 
 ---
 
@@ -98,52 +124,51 @@ Then install the skill from the `skill/` folder into your Claude skills director
 
 | Field | Default | Description |
 |---|---|---|
-| `main` | `deepseek/deepseek-v4-pro` | Primary model for extraction, merging, edge classification |
-| `cheap` | `deepseek/deepseek-v4-flash` | Faster model for lighter tasks |
+| `main` | `deepseek/deepseek-v4-pro` | Primary model — extraction, merging, edge classification |
+| `cheap` | `deepseek/deepseek-v4-flash` | Lighter model for faster tasks |
 | `embeddings` | `sentence-transformers/all-mpnet-base-v2` | Embedding model for claim clustering |
 
-Models are referenced via OpenRouter. Any OpenRouter model ID works here.
+Any OpenRouter model ID works.
 
 ### `search`
 
 | Field | Default | Description |
 |---|---|---|
-| `provider` | `tavily` | Search provider (only `tavily` supported currently) |
-| `search_depth` | `basic` | Tavily search depth: `basic` or `advanced` |
-| `extract_top_n` | `5` | Number of sources to fetch per query |
+| `search_depth` | `basic` | Tavily depth: `basic` or `advanced` |
+| `extract_top_n` | `5` | Sources fetched per query |
 
 ### `pipeline`
 
 | Field | Default | Description |
 |---|---|---|
-| `chunk_size` | `400` | Token size for document chunks before claim extraction |
-| `chunk_overlap` | `50` | Overlap between chunks to avoid cutting claims |
-| `similarity_threshold` | `0.75` | Cosine similarity threshold for clustering claims. Lower = more aggressive merging. Try `0.65` if you're seeing few conflicts |
-| `faithfulness_check` | `true` | Whether to verify extracted claims against source text |
-| `require_corroboration` | `false` | If true, drops any claim not supported by at least 2 sources |
-| `min_reliability_tier` | `low` | Filter out sources below this tier: `low`, `medium`, or `high` |
-| `max_claims_per_source` | `20` | Cap on claims extracted per source document |
-| `interruptible` | `false` | If true, pipeline pauses at each stage for UI approval before continuing |
-| `require_combine_approval` | `false` | If true, `combine_graphs` MCP call blocks until approved in the UI |
+| `chunk_size` | `400` | Word size per document chunk |
+| `chunk_overlap` | `50` | Overlap between chunks |
+| `similarity_threshold` | `0.75` | Cosine similarity threshold for claim clustering |
+| `faithfulness_check` | `true` | Verify claims against source chunk |
+| `require_corroboration` | `false` | Drop claims not supported by 2+ sources |
+| `min_reliability_tier` | `low` | Filter sources below this tier |
+| `max_claims_per_source` | `20` | Cap on claims per source |
+| `interruptible` | `false` | Pause at each stage for UI approval |
+| `require_combine_approval` | `false` | Block `combine_graphs` until approved in UI |
 
 ### `research`
 
-Controls the Claude skill behaviour:
+Controls the Claude skill:
 
 | Field | Default | Description |
 |---|---|---|
-| `min_queries` | `2` | Minimum sub-queries to decompose a research question into |
-| `max_queries` | `3` | Maximum sub-queries per research task |
-| `max_followup_rounds` | `1` | How many gap-filling search rounds the skill can run after reviewing initial summaries |
+| `min_queries` | `2` | Minimum sub-queries per research question |
+| `max_queries` | `3` | Maximum sub-queries |
+| `max_followup_rounds` | `1` | Gap-filling rounds after initial search |
 
 ### `sources`
 
 | Field | Default | Description |
 |---|---|---|
-| `trusted` | `[]` | Domain list that gets a reliability boost (e.g. `["nature.com", "arxiv.org"]`) |
-| `untrusted` | `[]` | Domain list that gets a reliability penalty |
-| `blocked_domains` | `[]` | Domains excluded from search results entirely |
-| `blocked_authors` | `[]` | Author names excluded from results (case-insensitive) |
+| `trusted` | `[]` | Domains that get a reliability boost |
+| `untrusted` | `[]` | Domains that get a reliability penalty |
+| `blocked_domains` | `[]` | Domains excluded entirely |
+| `blocked_authors` | `[]` | Author names excluded (case-insensitive) |
 
 ---
 
@@ -154,7 +179,7 @@ structured-research/
 ├── backend/
 │   ├── main.py              # FastAPI app — HTTP endpoints + MCP over SSE
 │   ├── server.py            # Entry point — runs HTTP + MCP stdio together
-│   ├── mcp_server.py        # MCP tool definitions (structured_search, combine_graphs)
+│   ├── mcp_server.py        # MCP tools: structured_search, combine_graphs, get_research_config
 │   ├── models.py            # Pydantic models: Source, Claim, Edge, ClaimGraph
 │   ├── graph_store.py       # In-memory + disk persistence for graphs
 │   ├── broadcaster.py       # SSE pub/sub for frontend live updates
@@ -162,31 +187,30 @@ structured-research/
 │   ├── llm.py               # OpenRouter LLM + embedding client
 │   ├── config.py            # Config loader
 │   └── pipeline/
-│       ├── fetch.py         # Web search + document fetching
-│       ├── extract_claims.py# Chunk → LLM → structured claims
+│       ├── fetch.py         # Tavily search + document fetching
+│       ├── extract_claims.py# Chunk → LLM → structured claims + metadata
 │       ├── reliability.py   # Source reliability scoring
-│       ├── merge.py         # Embedding cluster → LLM merge/conflict detection
-│       ├── edges.py         # LLM edge classification (supports/contradicts/qualifies)
-│       ├── match.py         # Faithfulness scoring (claim vs source chunk)
+│       ├── merge.py         # Corroboration grouping + conflict detection
+│       ├── edges.py         # Edge classification
+│       ├── match.py         # Faithfulness scoring
 │       └── combine.py       # Cross-graph dedup, remap, re-merge
 ├── frontend/
 │   └── src/
-│       ├── App.tsx
-│       ├── store.ts         # Zustand state
+│       ├── store.ts         # Zustand state + all mutations
 │       ├── api.ts           # HTTP client
-│       ├── types.ts
+│       ├── types.ts         # TypeScript types
 │       └── components/
-│           ├── GraphWorkspace.tsx
-│           ├── ClaimList.tsx
-│           ├── SourceList.tsx
-│           ├── EdgeList.tsx
-│           ├── ConflictPanel.tsx
-│           ├── ClaimEditor.tsx
-│           ├── PipelineLog.tsx
-│           ├── SessionList.tsx
-│           └── ConfigPanel.tsx
+│           ├── GraphWorkspace.tsx   # Main workspace with tab navigation
+│           ├── ClaimList.tsx        # Claims tab with filtering + search
+│           ├── SourceList.tsx       # Sources tab with reliability display
+│           ├── EdgeList.tsx         # Edges tab
+│           ├── ConflictPanel.tsx    # Conflicts tab
+│           ├── ClaimEditor.tsx      # Inline claim editing
+│           ├── PipelineLog.tsx      # Live pipeline event stream
+│           ├── SessionList.tsx      # Session sidebar with combine controls
+│           └── ConfigPanel.tsx      # Runtime config editor
 ├── skill/
-│   └── SKILL.md             # Claude Code skill for automated research workflow
+│   └── SKILL.md             # Claude Code skill for automated research
 └── config.json
 ```
 
@@ -195,10 +219,11 @@ structured-research/
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/research` | Run full pipeline, return graph |
-| `POST` | `/research/stream` | Same but SSE stream of pipeline events |
+| `POST` | `/research/stream` | SSE stream of pipeline events + result |
 | `POST` | `/combine` | Combine multiple ClaimGraph objects |
 | `GET` | `/graphs` | List all stored graphs |
 | `GET` | `/graphs/{id}` | Fetch a specific graph |
+| `DELETE` | `/graphs/{id}` | Delete a graph from memory and disk |
 | `GET` | `/events` | SSE stream of global graph events |
 | `POST` | `/approve-stage/{id}/{stage}` | Approve/reject an interruptible pipeline stage |
 | `GET` | `/pending-stages` | List stages waiting for approval |
@@ -209,8 +234,9 @@ structured-research/
 
 | Tool | Description |
 |---|---|
+| `get_research_config` | Returns current min/max queries and pipeline settings — call first |
 | `structured_search` | Run a single search query, returns graph_id + summary |
-| `combine_graphs` | Merge one or more graphs into a unified dict-indexed evidence base |
+| `combine_graphs` | Merge one or more graphs into a unified evidence base |
 
 ---
 
