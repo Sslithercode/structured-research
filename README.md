@@ -21,7 +21,7 @@ A research agent harness which turns questions into reliability-scored claim gra
 - Python 3.11+
 - Node.js 18+
 - An [OpenRouter](https://openrouter.ai) API key (for LLM calls)
-- A [Tavily](https://tavily.com) API key (for web search)
+- A [Tavily](https://tavily.com) API key (for web search) other providers coming soon
 
 ### 1. Clone and install backend
 
